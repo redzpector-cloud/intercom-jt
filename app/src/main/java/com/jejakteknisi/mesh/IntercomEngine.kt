@@ -22,7 +22,7 @@ class IntercomEngine(private val context: Context) {
         private const val ENCODING = AudioFormat.ENCODING_PCM_16BIT
         private const val HANDSHAKE = "JT1"
         private const val HEARTBEAT_MS = 2000L
-        private const val DEAD_MS = 7000L
+        private const val DEAD_MS = 4000L
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -43,6 +43,7 @@ class IntercomEngine(private val context: Context) {
     private var track: AudioTrack? = null
     private val running = AtomicBoolean(false)
     private val connecting = AtomicBoolean(false)
+    private val reconnecting = AtomicBoolean(false)
     @Volatile private var lastRx = 0L
 
     @Volatile var status: String = "Menyiapkan jaringan..."
@@ -280,20 +281,34 @@ class IntercomEngine(private val context: Context) {
     }
 
     private fun startReconnectLoop() {
+        if (!reconnecting.compareAndSet(false, true)) return
+
         scope.launch {
-            var delayMs = 500L
-            repeat(20) {
-                if (!running.get() || (socket != null && !socket!!.isClosed)) return@launch
-                val host = lastHost
-                val port = lastPort
-                if (host != null && port > 0) {
-                    connectTo(host, port)
+            try {
+                // Fast reconnect to the last known IP/port first.
+                // This avoids waiting for mDNS when the Wi-Fi link comes back.
+                val retryDelays = longArrayOf(0L, 250L, 500L, 750L, 1000L, 1500L, 2000L)
+                for (wait in retryDelays) {
+                    if (!running.get() || (socket != null && !socket!!.isClosed)) return@launch
+                    if (wait > 0) delay(wait)
+
+                    val host = lastHost
+                    val port = lastPort
+                    if (host != null && port > 0) {
+                        connectTo(host, port)
+                    }
                 }
-                delay(delayMs)
-                delayMs = (delayMs * 2).coerceAtMost(5000L)
-            }
-            if (running.get() && (socket == null || socket!!.isClosed)) {
-                setStatus("🟡 Mencari ulang HP...")
+
+                // Keep a gentle retry loop alive while NSD discovery searches for
+                // a new IP/port after a router/hotspot change.
+                while (running.get() && (socket == null || socket!!.isClosed)) {
+                    delay(2000L)
+                    val host = lastHost
+                    val port = lastPort
+                    if (host != null && port > 0) connectTo(host, port)
+                }
+            } finally {
+                reconnecting.set(false)
             }
         }
     }
