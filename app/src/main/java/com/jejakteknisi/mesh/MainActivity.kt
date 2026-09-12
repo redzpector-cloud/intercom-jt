@@ -7,8 +7,6 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -16,42 +14,45 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 
-data class Peer(val name: String, val status: String)
-
 class MainActivity : ComponentActivity() {
+    private lateinit var engine: IntercomEngine
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
-    ) { }
+    ) { granted ->
+        if (granted[Manifest.permission.RECORD_AUDIO] == true) engine.start()
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        requestPermissionsIfNeeded()
-        setContent { IntercomScreen() }
+        engine = IntercomEngine(this)
+        setContent { IntercomScreen(engine) }
+        requestAudioPermission()
     }
 
-    private fun requestPermissionsIfNeeded() {
-        val permissions = buildList {
-            if (android.os.Build.VERSION.SDK_INT >= 33) {
-                add(Manifest.permission.NEARBY_WIFI_DEVICES)
-                add(Manifest.permission.BLUETOOTH_SCAN)
-                add(Manifest.permission.BLUETOOTH_CONNECT)
-            }
-            add(Manifest.permission.RECORD_AUDIO)
-            add(Manifest.permission.ACCESS_FINE_LOCATION)
-        }.filter { ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED }
-        if (permissions.isNotEmpty()) permissionLauncher.launch(permissions.toTypedArray())
+    private fun requestAudioPermission() {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
+            != PackageManager.PERMISSION_GRANTED) {
+            permissionLauncher.launch(arrayOf(Manifest.permission.RECORD_AUDIO))
+        } else engine.start()
+    }
+
+    override fun onDestroy() {
+        engine.stop()
+        super.onDestroy()
     }
 }
 
 @Composable
-fun IntercomScreen() {
+fun IntercomScreen(engine: IntercomEngine) {
+    var status by remember { mutableStateOf(engine.status) }
     var connected by remember { mutableStateOf(false) }
-    var micOn by remember { mutableStateOf(false) }
-    val peers = remember {
-        mutableStateListOf(
-            Peer("HP-01", "Siap mencari"),
-            Peer("HP-02", "Siap mencari")
-        )
+
+    DisposableEffect(Unit) {
+        engine.onStatus = {
+            status = it
+            connected = it.contains("TERHUBUNG")
+        }
+        onDispose { engine.onStatus = null }
     }
 
     MaterialTheme {
@@ -61,51 +62,43 @@ fun IntercomScreen() {
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 Text("JEJAK TEKNISI", style = MaterialTheme.typography.headlineMedium)
-                Text("MESH INTERCOM V1", style = MaterialTheme.typography.titleMedium)
+                Text("MESH INTERCOM V1.1", style = MaterialTheme.typography.titleMedium)
                 Spacer(Modifier.height(20.dp))
 
                 Card(Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(20.dp)) {
                         Text(
-                            if (connected) "🟢 TERHUBUNG" else "🟡 SIAP TERHUBUNG",
+                            if (connected) "🟢 TERHUBUNG" else "🟡 $status",
                             style = MaterialTheme.typography.titleLarge
                         )
                         Spacer(Modifier.height(8.dp))
                         Text("Mode: AUTO LOCAL")
-                        Text("V1: 2 HP • audio engine siap dikembangkan")
+                        Text(if (connected) "Audio real-time aktif" else "Pastikan kedua HP di Wi-Fi yang sama")
                     }
                 }
 
-                Spacer(Modifier.height(20.dp))
-                Text("ANGGOTA", style = MaterialTheme.typography.titleMedium)
-                Spacer(Modifier.height(8.dp))
+                Spacer(Modifier.height(24.dp))
+                Text(
+                    if (connected) "🎙️ Mic ↔ 🔊 Speaker AKTIF"
+                    else "🔎 MENCARI HP LAIN...",
+                    style = MaterialTheme.typography.titleMedium
+                )
 
-                LazyColumn(Modifier.fillMaxWidth().weight(1f)) {
-                    items(peers) { peer ->
-                        ListItem(
-                            headlineContent = { Text(peer.name) },
-                            supportingContent = { Text(peer.status) }
-                        )
-                        HorizontalDivider()
-                    }
-                }
-
-                Spacer(Modifier.height(12.dp))
+                Spacer(Modifier.weight(1f))
                 Button(
-                    onClick = { connected = !connected },
+                    onClick = {
+                        engine.stop()
+                        engine.start()
+                    },
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Text(if (connected) "PUTUSKAN" else "CARI & HUBUNGKAN")
+                    Text("CARI ULANG")
                 }
-
                 Spacer(Modifier.height(10.dp))
-                Button(
-                    onClick = { micOn = !micOn },
-                    modifier = Modifier.fillMaxWidth(),
-                    enabled = connected
-                ) {
-                    Text(if (micOn) "🎙️ MICROPHONE AKTIF" else "🎙️ BICARA")
-                }
+                Text(
+                    "V1.1 menggunakan Wi-Fi yang sama untuk tes 2 HP.",
+                    style = MaterialTheme.typography.bodySmall
+                )
             }
         }
     }
