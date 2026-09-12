@@ -1,15 +1,373 @@
 package com.jejakteknisi.mesh
-import android.Manifest;import android.content.*;import android.content.pm.PackageManager;import android.net.wifi.p2p.*
-import android.net.wifi.WpsInfo;import android.os.Build;import android.media.*;import kotlinx.coroutines.*;import java.io.*;import java.net.*;import java.util.concurrent.atomic.AtomicBoolean
-class WifiDirectEngine(private val c:Context){private val m=c.getSystemService(Context.WIFI_P2P_SERVICE) as WifiP2pManager;private val ch=m.initialize(c,c.mainLooper(),null);private val run=AtomicBoolean();private val sc=CoroutineScope(SupervisorJob()+Dispatchers.IO);private var r:BroadcastReceiver?=null;private var ss:ServerSocket?=null;@Volatile private var s:Socket?=null;private var ar:AudioRecord?=null;private var at:AudioTrack?=null;@Volatile var status="Menyiapkan Wi-Fi Direct...";private set;var onStatus:((String)->Unit)?=null;private fun st(x:String){status=x;onStatus?.invoke(x)};private fun ok()=Build.VERSION.SDK_INT<33||c.checkSelfPermission(Manifest.permission.NEARBY_WIFI_DEVICES)==PackageManager.PERMISSION_GRANTED
-fun start(){if(run.getAndSet(true))return;reg();st("Mencari HP melalui Wi-Fi Direct...");disc();sc.launch{delay(1000);connectToFirstPeer()}}
-private fun reg(){if(r!=null)return;r=object:BroadcastReceiver(){override fun onReceive(x:Context,i:Intent){when(i.action){WifiP2pManager.WIFI_P2P_CONNECTION_CHANGED_ACTION->info();WifiP2pManager.WIFI_P2P_STATE_CHANGED_ACTION->if(i.getIntExtra(WifiP2pManager.EXTRA_WIFI_STATE,-1)==WifiP2pManager.WIFI_P2P_STATE_ENABLED)disc()}}};c.registerReceiver(r,IntentFilter().apply{addAction(WifiP2pManager.WIFI_P2P_CONNECTION_CHANGED_ACTION);addAction(WifiP2pManager.WIFI_P2P_STATE_CHANGED_ACTION);addAction(WifiP2pManager.WIFI_P2P_PEERS_CHANGED_ACTION)})}
-private fun disc(){if(!run.get()||!ok())return;try{m.discoverPeers(ch,object:WifiP2pManager.ActionListener{override fun onSuccess(){};override fun onFailure(x:Int){sc.launch{delay(1200);disc()}}})}catch(_:Exception){st("Izin Nearby Devices diperlukan")}}
-fun connectToFirstPeer(){if(!run.get()||!ok())return;try{m.requestPeers(ch){l->val p=l.deviceList.firstOrNull()?:run{st("Menunggu HP kedua...");sc.launch{delay(1000);disc();connectToFirstPeer()}};if(p!=null){val q=WifiP2pConfig().apply{deviceAddress=p.deviceAddress;wps.setup=WpsInfo.PBC};m.connect(ch,q,object:WifiP2pManager.ActionListener{override fun onSuccess(){st("Menghubungkan...")};override fun onFailure(x:Int){sc.launch{delay(900);disc();connectToFirstPeer()}}})}}}catch(_:Exception){}}
-private fun info(){if(!run.get()||!ok())return;try{m.requestConnectionInfo(ch){i->if(i.groupFormed){if(i.isGroupOwner)server() else i.groupOwnerAddress?.let{client(it)}}}}catch(_:Exception){}}
-private fun server(){if(ss?.isClosed==false)return;sc.launch{try{ss=ServerSocket(45454);st("Menunggu HP kedua...");install(ss!!.accept())}catch(_:Exception){if(run.get()){delay(500);server()}}}}
-private fun client(h:InetAddress){if(s?.isClosed==false)return;sc.launch{try{val x=Socket();x.tcpNoDelay=true;x.keepAlive=true;x.connect(InetSocketAddress(h,45454),2000);install(x)}catch(_:Exception){if(run.get()){delay(700);info()}}}}
-@Synchronized private fun install(x:Socket){if(!run.get()||s?.isClosed==false){try{x.close()}catch(_:Exception){};return};s=x;st("🟢 TERHUBUNG — Wi-Fi Direct");audio(x)}
-private fun audio(x:Socket){val ci=AudioRecord.getMinBufferSize(16000,AudioFormat.CHANNEL_IN_MONO,AudioFormat.ENCODING_PCM_16BIT);val co=AudioTrack.getMinBufferSize(16000,AudioFormat.CHANNEL_OUT_MONO,AudioFormat.ENCODING_PCM_16BIT);if(ci<=0||co<=0){st("Audio tidak didukung");return};ar=AudioRecord(MediaRecorder.AudioSource.VOICE_COMMUNICATION,16000,AudioFormat.CHANNEL_IN_MONO,AudioFormat.ENCODING_PCM_16BIT,ci*2);at=AudioTrack.Builder().setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION).setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build()).setAudioFormat(AudioFormat.Builder().setSampleRate(16000).setEncoding(AudioFormat.ENCODING_PCM_16BIT).setChannelMask(AudioFormat.CHANNEL_OUT_MONO).build()).setBufferSizeInBytes(co*2).setTransferMode(AudioTrack.MODE_STREAM).build();at?.play();sc.launch{try{val o=DataOutputStream(BufferedOutputStream(x.getOutputStream()));val b=ByteArray(640);ar?.startRecording();while(run.get()&&x===s&&!x.isClosed){val n=ar?.read(b,0,b.size)?:-1;if(n>0){o.writeInt(n);o.write(b,0,n);o.flush()}}}catch(_:Exception){discX(x)}};sc.launch{try{val i=DataInputStream(BufferedInputStream(x.getInputStream()));while(run.get()&&x===s&&!x.isClosed){val n=i.readInt();if(n !in 1..4096)throw IOException();val b=ByteArray(n);i.readFully(b);at?.write(b,0,n)}}catch(_:Exception){discX(x)}}}
-private fun discX(x:Socket){if(s!==x)return;try{x.close()}catch(_:Exception){};s=null;try{ar?.stop()}catch(_:Exception){};try{at?.pause()}catch(_:Exception){};if(run.get()){st("🟡 Putus — mencari HP lagi...");sc.launch{delay(400);disc();delay(400);connectToFirstPeer()}}}
-fun stop(){if(!run.getAndSet(false))return;try{r?.let{c.unregisterReceiver(it)}}catch(_:Exception){};r=null;try{s?.close();ss?.close()}catch(_:Exception){};try{ar?.stop();ar?.release();at?.stop();at?.release()}catch(_:Exception){};s=null}}
+
+import android.Manifest
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.content.pm.PackageManager
+import android.media.AudioAttributes
+import android.media.AudioFormat
+import android.media.AudioRecord
+import android.media.AudioTrack
+import android.media.MediaRecorder
+import android.net.wifi.WpsInfo
+import android.net.wifi.p2p.WifiP2pConfig
+import android.net.wifi.p2p.WifiP2pDevice
+import android.net.wifi.p2p.WifiP2pManager
+import android.os.Build
+import android.os.Looper
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import java.io.BufferedInputStream
+import java.io.BufferedOutputStream
+import java.io.DataInputStream
+import java.io.DataOutputStream
+import java.io.IOException
+import java.net.InetAddress
+import java.net.InetSocketAddress
+import java.net.ServerSocket
+import java.net.Socket
+import java.util.concurrent.atomic.AtomicBoolean
+
+class WifiDirectEngine(private val context: Context) {
+    companion object {
+        private const val PORT = 45454
+        private const val SAMPLE_RATE = 16000
+        private const val FRAME_BYTES = 640
+    }
+
+    private val manager: WifiP2pManager =
+        context.getSystemService(Context.WIFI_P2P_SERVICE) as WifiP2pManager
+    private var channel: WifiP2pManager.Channel? = null
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val running = AtomicBoolean(false)
+
+    private var receiver: BroadcastReceiver? = null
+    private var serverSocket: ServerSocket? = null
+    @Volatile private var socket: Socket? = null
+    private var audioRecord: AudioRecord? = null
+    private var audioTrack: AudioTrack? = null
+
+    @Volatile var status: String = "Menyiapkan Wi-Fi Direct..."
+        private set
+    var onStatus: ((String) -> Unit)? = null
+
+    private fun getChannel(): WifiP2pManager.Channel {
+        val existing = channel
+        if (existing != null) return existing
+        val created = manager.initialize(
+            context.applicationContext,
+            Looper.getMainLooper(),
+            null
+        )
+        channel = created
+        return created
+    }
+
+    private fun setStatus(value: String) {
+        status = value
+        onStatus?.invoke(value)
+    }
+
+    private fun hasPermission(): Boolean {
+        return if (Build.VERSION.SDK_INT >= 33) {
+            context.checkSelfPermission(Manifest.permission.NEARBY_WIFI_DEVICES) ==
+                PackageManager.PERMISSION_GRANTED
+        } else {
+            context.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) ==
+                PackageManager.PERMISSION_GRANTED
+        }
+    }
+
+    fun start() {
+        if (running.getAndSet(true)) return
+        registerReceiver()
+        if (!hasPermission()) {
+            setStatus("Izinkan Nearby Devices untuk Wi-Fi Direct")
+            return
+        }
+        setStatus("Mencari HP melalui Wi-Fi Direct...")
+        discover()
+        scope.launch {
+            delay(1200)
+            requestPeersAndConnect()
+        }
+    }
+
+    private fun registerReceiver() {
+        if (receiver != null) return
+        receiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context, intent: Intent) {
+                when (intent.action) {
+                    WifiP2pManager.WIFI_P2P_STATE_CHANGED_ACTION -> {
+                        val enabled = intent.getIntExtra(
+                            WifiP2pManager.EXTRA_WIFI_STATE, -1
+                        ) == WifiP2pManager.WIFI_P2P_STATE_ENABLED
+                        if (enabled) discover()
+                        else setStatus("Wi-Fi Direct tidak aktif")
+                    }
+                    WifiP2pManager.WIFI_P2P_CONNECTION_CHANGED_ACTION -> requestConnectionInfo()
+                    WifiP2pManager.WIFI_P2P_PEERS_CHANGED_ACTION -> requestPeersAndConnect()
+                }
+            }
+        }
+
+        val filter = IntentFilter().apply {
+            addAction(WifiP2pManager.WIFI_P2P_STATE_CHANGED_ACTION)
+            addAction(WifiP2pManager.WIFI_P2P_CONNECTION_CHANGED_ACTION)
+            addAction(WifiP2pManager.WIFI_P2P_PEERS_CHANGED_ACTION)
+        }
+        if (Build.VERSION.SDK_INT >= 33) {
+            context.registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            @Suppress("DEPRECATION")
+            context.registerReceiver(receiver, filter)
+        }
+    }
+
+    private fun discover() {
+        if (!running.get() || !hasPermission()) return
+        try {
+            manager.discoverPeers(
+                getChannel(),
+                object : WifiP2pManager.ActionListener {
+                    override fun onSuccess() {
+                        setStatus("🔎 Mencari HP lain...")
+                    }
+                    override fun onFailure(reason: Int) {
+                        setStatus("Pencarian gagal ($reason), mencoba lagi...")
+                        scope.launch { delay(1500); discover() }
+                    }
+                }
+            )
+        } catch (e: Exception) {
+            setStatus("Wi-Fi Direct belum siap")
+        }
+    }
+
+    private fun requestPeersAndConnect() {
+        if (!running.get() || !hasPermission()) return
+        try {
+            manager.requestPeers(getChannel()) { peers ->
+                val peer: WifiP2pDevice? = peers.deviceList.firstOrNull()
+                if (peer == null) {
+                    setStatus("Menunggu HP kedua...")
+                    scope.launch {
+                        delay(1500)
+                        discover()
+                        requestPeersAndConnect()
+                    }
+                    return@requestPeers
+                }
+
+                if (socket?.isClosed == false) return@requestPeers
+
+                val config = WifiP2pConfig().apply {
+                    deviceAddress = peer.deviceAddress
+                    wps.setup = WpsInfo.PBC
+                }
+
+                manager.connect(
+                    getChannel(),
+                    config,
+                    object : WifiP2pManager.ActionListener {
+                        override fun onSuccess() {
+                            setStatus("Menghubungkan ke ${peer.deviceName}...")
+                        }
+                        override fun onFailure(reason: Int) {
+                            setStatus("Gagal terhubung ($reason), mencoba lagi...")
+                            scope.launch {
+                                delay(1200)
+                                discover()
+                                requestPeersAndConnect()
+                            }
+                        }
+                    }
+                )
+            }
+        } catch (e: Exception) {
+            setStatus("Wi-Fi Direct belum siap")
+        }
+    }
+
+    private fun requestConnectionInfo() {
+        if (!running.get() || !hasPermission()) return
+        try {
+            manager.requestConnectionInfo(getChannel()) { info ->
+                if (!info.groupFormed) return@requestConnectionInfo
+                if (info.isGroupOwner) startServer()
+                else info.groupOwnerAddress?.let { connectClient(it) }
+            }
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun startServer() {
+        if (serverSocket?.isClosed == false) return
+        scope.launch {
+            try {
+                serverSocket = ServerSocket(PORT)
+                setStatus("🟡 Menunggu HP kedua...")
+                installSocket(serverSocket!!.accept())
+            } catch (_: Exception) {
+                if (running.get()) {
+                    delay(700)
+                    startServer()
+                }
+            }
+        }
+    }
+
+    private fun connectClient(host: InetAddress) {
+        if (socket?.isClosed == false) return
+        scope.launch {
+            try {
+                setStatus("🟡 Menghubungkan audio...")
+                val newSocket = Socket()
+                newSocket.tcpNoDelay = true
+                newSocket.keepAlive = true
+                newSocket.connect(InetSocketAddress(host, PORT), 2500)
+                installSocket(newSocket)
+            } catch (_: Exception) {
+                if (running.get()) {
+                    delay(900)
+                    requestConnectionInfo()
+                }
+            }
+        }
+    }
+
+    @Synchronized
+    private fun installSocket(newSocket: Socket) {
+        if (!running.get()) {
+            try { newSocket.close() } catch (_: Exception) {}
+            return
+        }
+        if (socket?.isClosed == false) {
+            try { newSocket.close() } catch (_: Exception) {}
+            return
+        }
+        socket = newSocket
+        setStatus("🟢 TERHUBUNG — Wi-Fi Direct")
+        startAudio(newSocket)
+    }
+
+    private fun startAudio(s: Socket) {
+        stopAudioOnly()
+
+        val inputMin = AudioRecord.getMinBufferSize(
+            SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT
+        )
+        val outputMin = AudioTrack.getMinBufferSize(
+            SAMPLE_RATE, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT
+        )
+        if (inputMin <= 0 || outputMin <= 0) {
+            setStatus("Audio tidak didukung")
+            return
+        }
+
+        audioRecord = AudioRecord(
+            MediaRecorder.AudioSource.VOICE_COMMUNICATION,
+            SAMPLE_RATE,
+            AudioFormat.CHANNEL_IN_MONO,
+            AudioFormat.ENCODING_PCM_16BIT,
+            inputMin * 2
+        )
+        audioTrack = AudioTrack.Builder()
+            .setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                    .build()
+            )
+            .setAudioFormat(
+                AudioFormat.Builder()
+                    .setSampleRate(SAMPLE_RATE)
+                    .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                    .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                    .build()
+            )
+            .setBufferSizeInBytes(outputMin * 2)
+            .setTransferMode(AudioTrack.MODE_STREAM)
+            .build()
+
+        audioTrack?.play()
+
+        scope.launch {
+            try {
+                val output = DataOutputStream(BufferedOutputStream(s.getOutputStream()))
+                val buffer = ByteArray(FRAME_BYTES)
+                audioRecord?.startRecording()
+                while (running.get() && socket === s && !s.isClosed) {
+                    val count = audioRecord?.read(buffer, 0, buffer.size) ?: -1
+                    if (count > 0) {
+                        output.writeInt(count)
+                        output.write(buffer, 0, count)
+                        output.flush()
+                    }
+                }
+            } catch (_: Exception) {
+                disconnect(s)
+            }
+        }
+
+        scope.launch {
+            try {
+                val input = DataInputStream(BufferedInputStream(s.getInputStream()))
+                while (running.get() && socket === s && !s.isClosed) {
+                    val count = input.readInt()
+                    if (count !in 1..4096) throw IOException("Invalid audio frame")
+                    val buffer = ByteArray(count)
+                    input.readFully(buffer)
+                    audioTrack?.write(buffer, 0, count)
+                }
+            } catch (_: Exception) {
+                disconnect(s)
+            }
+        }
+    }
+
+    private fun stopAudioOnly() {
+        try { audioRecord?.stop() } catch (_: Exception) {}
+        try { audioRecord?.release() } catch (_: Exception) {}
+        try { audioTrack?.stop() } catch (_: Exception) {}
+        try { audioTrack?.release() } catch (_: Exception) {}
+        audioRecord = null
+        audioTrack = null
+    }
+
+    @Synchronized
+    private fun disconnect(oldSocket: Socket) {
+        if (socket !== oldSocket) return
+        try { oldSocket.close() } catch (_: Exception) {}
+        socket = null
+        stopAudioOnly()
+        if (running.get()) {
+            setStatus("🟡 Putus — mencari HP lagi...")
+            scope.launch {
+                delay(400)
+                discover()
+                delay(600)
+                requestPeersAndConnect()
+            }
+        }
+    }
+
+    fun stop() {
+        if (!running.getAndSet(false)) return
+        try { receiver?.let { context.unregisterReceiver(it) } } catch (_: Exception) {}
+        receiver = null
+        try { socket?.close() } catch (_: Exception) {}
+        try { serverSocket?.close() } catch (_: Exception) {}
+        socket = null
+        serverSocket = null
+        stopAudioOnly()
+        try { manager.stopPeerDiscovery(getChannel(), null) } catch (_: Exception) {}
+        try { manager.removeGroup(getChannel(), null) } catch (_: Exception) {}
+        setStatus("Tidak terhubung")
+    }
+}
