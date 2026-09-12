@@ -1,0 +1,1 @@
+V1.6.1 compile fix: corrected WifiP2pManager Channel initialization/API usage and peer discovery auto-connect. Version 1.6.1 build 7.
