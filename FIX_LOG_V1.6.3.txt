@@ -1,0 +1,11 @@
+V1.6.3 – Wi-Fi Direct discovery stabilization
+
+- Stop existing peer discovery before starting a new discovery cycle to reduce BUSY failures.
+- Retry discovery automatically with controlled timing.
+- Check Wi-Fi is enabled.
+- Check Location services are enabled because some Android devices require Location for Wi-Fi P2P discovery.
+- Show readable discovery failure reason.
+- Request peers immediately after successful discovery.
+- Manual CARI & HUBUNGKAN now triggers discovery + peer request.
+- Removed recursive peer polling that could create overlapping discovery calls.
+- Audio architecture unchanged.

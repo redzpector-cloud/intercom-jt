@@ -11,6 +11,7 @@ import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.AudioTrack
 import android.media.MediaRecorder
+import android.net.wifi.WifiManager
 import android.net.wifi.WpsInfo
 import android.net.wifi.p2p.WifiP2pConfig
 import android.net.wifi.p2p.WifiP2pDevice
@@ -22,6 +23,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Job
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
 import java.io.DataInputStream
@@ -45,6 +47,8 @@ class WifiDirectEngine(private val context: Context) {
     private var channel: WifiP2pManager.Channel? = null
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val running = AtomicBoolean(false)
+    private var discoveryJob: Job? = null
+    private var discoveryBusy = AtomicBoolean(false)
 
     private var receiver: BroadcastReceiver? = null
     private var serverSocket: ServerSocket? = null
@@ -81,6 +85,17 @@ class WifiDirectEngine(private val context: Context) {
             context.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) ==
                 PackageManager.PERMISSION_GRANTED
         }
+    }
+
+    private fun wifiEnabled(): Boolean {
+        val wm = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+        return wm?.isWifiEnabled == true
+    }
+
+    private fun locationEnabled(): Boolean {
+        if (Build.VERSION.SDK_INT < 23) return true
+        val lm = context.getSystemService(Context.LOCATION_SERVICE) as? android.location.LocationManager
+        return lm?.isLocationEnabled == true
     }
 
     fun start() {
@@ -131,27 +146,72 @@ class WifiDirectEngine(private val context: Context) {
 
     private fun discover() {
         if (!running.get() || !hasPermission()) return
+        if (!wifiEnabled()) {
+            setStatus("Nyalakan Wi-Fi di kedua HP")
+            return
+        }
+        if (Build.VERSION.SDK_INT >= 23 && !locationEnabled()) {
+            setStatus("Nyalakan Lokasi untuk menemukan HP lain")
+            return
+        }
+        if (!discoveryBusy.compareAndSet(false, true)) return
+
+        try {
+            manager.stopPeerDiscovery(getChannel(), object : WifiP2pManager.ActionListener {
+                override fun onSuccess() = startDiscoveryNow()
+                override fun onFailure(reason: Int) = startDiscoveryNow()
+            })
+        } catch (_: Exception) {
+            startDiscoveryNow()
+        }
+    }
+
+    private fun startDiscoveryNow() {
         try {
             manager.discoverPeers(
                 getChannel(),
                 object : WifiP2pManager.ActionListener {
                     override fun onSuccess() {
+                        discoveryBusy.set(false)
                         setStatus("🔎 Mencari HP lain...")
+                        requestPeersAndConnect()
+                        scheduleDiscoveryRetry()
                     }
                     override fun onFailure(reason: Int) {
-                        setStatus("Pencarian gagal ($reason), mencoba lagi...")
-                        scope.launch { delay(1500); discover() }
+                        discoveryBusy.set(false)
+                        setStatus("Pencarian gagal (${reasonText(reason)}), mencoba lagi...")
+                        scheduleDiscoveryRetry(2500)
                     }
                 }
             )
-        } catch (e: Exception) {
-            setStatus("Wi-Fi Direct belum siap")
+        } catch (_: Exception) {
+            discoveryBusy.set(false)
+            setStatus("Wi-Fi Direct belum siap, mencoba lagi...")
+            scheduleDiscoveryRetry(2500)
         }
+    }
+
+    private fun scheduleDiscoveryRetry(delayMs: Long = 3500) {
+        discoveryJob?.cancel()
+        discoveryJob = scope.launch {
+            delay(delayMs)
+            if (running.get() && socket?.isClosed != false) discover()
+        }
+    }
+
+    private fun reasonText(reason: Int): String = when (reason) {
+        WifiP2pManager.BUSY -> "BUSY"
+        WifiP2pManager.ERROR -> "ERROR"
+        WifiP2pManager.P2P_UNSUPPORTED -> "P2P tidak didukung"
+        else -> reason.toString()
     }
 
     /** Manual retry button exposed to the UI. */
     fun connectToFirstPeer() {
-        if (!running.get()) start() else requestPeersAndConnect()
+        if (!running.get()) start() else {
+            discover()
+            requestPeersAndConnect()
+        }
     }
 
     private fun requestPeersAndConnect() {
@@ -160,12 +220,7 @@ class WifiDirectEngine(private val context: Context) {
             manager.requestPeers(getChannel()) { peers ->
                 val peer: WifiP2pDevice? = peers.deviceList.firstOrNull()
                 if (peer == null) {
-                    setStatus("Menunggu HP kedua...")
-                    scope.launch {
-                        delay(1500)
-                        discover()
-                        requestPeersAndConnect()
-                    }
+                    setStatus("🔎 Belum menemukan HP kedua...")
                     return@requestPeers
                 }
 
@@ -185,11 +240,7 @@ class WifiDirectEngine(private val context: Context) {
                         }
                         override fun onFailure(reason: Int) {
                             setStatus("Gagal terhubung ($reason), mencoba lagi...")
-                            scope.launch {
-                                delay(1200)
-                                discover()
-                                requestPeersAndConnect()
-                            }
+                            scheduleDiscoveryRetry(1200)
                         }
                     }
                 )
