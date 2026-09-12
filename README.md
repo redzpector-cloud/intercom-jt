@@ -1,20 +1,26 @@
-# Jejak Teknisi Mesh Intercom V1.4 — Fast Reconnect
+# Jejak Teknisi Mesh Intercom V1.5 — Background / Screen Off
 
-Perbaikan fokus V1.4:
-- Reconnect ke IP/port terakhir dimulai segera.
-- Retry cepat: 0 / 250 / 500 / 750 / 1000 / 1500 / 2000 ms.
-- Hanya satu reconnect loop aktif agar tidak saling berebut.
-- Setelah retry cepat, tetap mencoba setiap 2 detik sambil NSD mencari alamat baru.
-- Dead connection detection dipercepat dari 7 detik menjadi 4 detik.
-- Wi-Fi lock dan audio engine dari V1.3 tetap dipertahankan.
+Fokus V1.5:
+- Foreground Service khusus microphone.
+- Interkom tetap berjalan saat aplikasi diminimalkan.
+- `stopWithTask=false` agar service tidak ikut berhenti ketika task aplikasi ditutup dari recent apps.
+- `START_STICKY` agar Android berusaha membuat ulang service setelah proses service dihentikan sistem.
+- Notifikasi permanen menunjukkan status interkom.
+- Tombol Putuskan tersedia dari notifikasi.
+- Engine audio/network tetap memakai V1.4 fast reconnect.
+- Wi-Fi lock dari engine dipertahankan untuk membantu koneksi saat layar mati.
 
 Tes:
-1. Build dan install V1.4 di kedua HP.
-2. Sambungkan kedua HP ke Wi-Fi yang sama.
-3. Pastikan suara sudah tersambung.
-4. Matikan Wi-Fi HP 2 selama 3 detik, lalu nyalakan lagi.
-5. Jangan tekan CARI ULANG.
-6. Ukur apakah koneksi kembali dalam beberapa detik.
+1. Build dan install V1.5 di kedua HP.
+2. Hubungkan kedua HP ke Wi-Fi yang sama.
+3. Izinkan Microphone dan Notification.
+4. Tunggu audio tersambung.
+5. Tekan Home/minimize aplikasi.
+6. Pastikan suara tetap berjalan.
+7. Matikan layar HP selama 10–30 detik.
+8. Nyalakan layar lagi dan cek apakah koneksi masih ada.
+9. Tes juga menutup aplikasi dari recent apps; service seharusnya tetap hidup.
 
 Catatan:
-V1.4 masih koneksi 2 HP. Setelah reconnect cukup cepat dan stabil, tahap berikutnya adalah multi-peer mesh relay.
+Beberapa merek Android memiliki battery saver/aggressive background restriction. Jika service tetap dihentikan oleh sistem, set aplikasi ke Battery: Unrestricted / Don't optimize sesuai menu HP.
+V1.5 belum multi-hop mesh. Setelah background stabil, lanjut multi-peer mesh relay dan internet fallback.

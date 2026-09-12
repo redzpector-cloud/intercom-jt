@@ -1,7 +1,9 @@
 package com.jejakteknisi.mesh
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -15,44 +17,70 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 
 class MainActivity : ComponentActivity() {
-    private lateinit var engine: IntercomEngine
-
     private val permissionLauncher = registerForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { granted ->
-        if (granted) engine.start()
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
+            == PackageManager.PERMISSION_GRANTED) {
+            startIntercomService()
+        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        engine = IntercomEngine(this)
-        setContent { IntercomScreen(engine) }
-
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
-            == PackageManager.PERMISSION_GRANTED) {
-            engine.start()
-        } else {
-            permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
-        }
+        setContent { IntercomScreen() }
+        requestPermissionsAndStart()
     }
 
-    override fun onDestroy() {
-        engine.stop()
-        super.onDestroy()
+    private fun requestPermissionsAndStart() {
+        val needed = mutableListOf<String>()
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
+            != PackageManager.PERMISSION_GRANTED) {
+            needed += Manifest.permission.RECORD_AUDIO
+        }
+        if (Build.VERSION.SDK_INT >= 33 &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
+            != PackageManager.PERMISSION_GRANTED) {
+            needed += Manifest.permission.POST_NOTIFICATIONS
+        }
+
+        if (needed.isEmpty()) startIntercomService()
+        else permissionLauncher.launch(needed.toTypedArray())
+    }
+
+    private fun startIntercomService() {
+        val intent = Intent(this, IntercomService::class.java)
+        ContextCompat.startForegroundService(this, intent)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
+            == PackageManager.PERMISSION_GRANTED) {
+            val intent = Intent(this, IntercomService::class.java)
+            ContextCompat.startForegroundService(this, intent)
+        }
     }
 }
 
 @Composable
-fun IntercomScreen(engine: IntercomEngine) {
-    var status by remember { mutableStateOf(engine.status) }
+fun IntercomScreen() {
+    var status by remember { mutableStateOf("Menyiapkan interkom...") }
     var connected by remember { mutableStateOf(false) }
 
     DisposableEffect(Unit) {
-        engine.onStatus = {
-            status = it
-            connected = it.contains("TERHUBUNG")
+        val engine = IntercomService.engine
+        if (engine != null) {
+            status = engine.status
+            connected = engine.status.contains("TERHUBUNG")
+            engine.onStatus = {
+                status = it
+                connected = it.contains("TERHUBUNG")
+            }
         }
-        onDispose { engine.onStatus = null }
+        onDispose {
+            IntercomService.engine?.onStatus = null
+        }
     }
 
     MaterialTheme {
@@ -62,7 +90,7 @@ fun IntercomScreen(engine: IntercomEngine) {
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 Text("JEJAK TEKNISI", style = MaterialTheme.typography.headlineMedium)
-                Text("MESH INTERCOM V1.3", style = MaterialTheme.typography.titleMedium)
+                Text("MESH INTERCOM V1.5", style = MaterialTheme.typography.titleMedium)
                 Spacer(Modifier.height(20.dp))
 
                 Card(Modifier.fillMaxWidth()) {
@@ -74,36 +102,38 @@ fun IntercomScreen(engine: IntercomEngine) {
                         Spacer(Modifier.height(8.dp))
                         Text("Mode: AUTO LOCAL")
                         Text(
-                            if (connected) "Audio 2 arah aktif"
-                            else "Hubungkan kedua HP ke Wi-Fi yang sama"
+                            if (connected) "🎙️ ↔ 🔊 Audio aktif di latar belakang"
+                            else "Mencari HP lain..."
                         )
                     }
                 }
 
-                Spacer(Modifier.height(28.dp))
+                Spacer(Modifier.height(24.dp))
                 Text(
-                    if (connected) "🎙️ ↔ 🔊 AUDIO AKTIF"
-                    else "🔎 MENCARI HP LAIN...",
+                    "LAYAR MATI / MINIMIZE",
                     style = MaterialTheme.typography.titleMedium
+                )
+                Text(
+                    "Interkom tetap berjalan melalui foreground service.",
+                    style = MaterialTheme.typography.bodyMedium
                 )
 
                 Spacer(Modifier.weight(1f))
                 Button(
-                    onClick = {
-                        engine.stop()
-                        engine.start()
-                    },
+                    onClick = { },
+                    enabled = false,
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Text("CARI ULANG")
+                    Text("INTERKOM AKTIF")
                 }
 
                 Spacer(Modifier.height(12.dp))
                 Text(
-                    "V1.3: koneksi 2 HP + reconnect lebih stabil.",
+                    "V1.5: tetap aktif saat aplikasi diminimalkan dan layar mati.",
                     style = MaterialTheme.typography.bodySmall
                 )
             }
         }
     }
 }
+
