@@ -1,21 +1,20 @@
-# Jejak Teknisi Mesh Intercom V1.1
+# Jejak Teknisi Mesh Intercom V1.2 — Stable 2 HP
 
-V1.1 adalah tes nyata 2 HP melalui jaringan Wi-Fi yang sama.
+Perbaikan utama dari V1.1:
+- Nama service unik untuk setiap HP.
+- Aturan client/server deterministik agar dua HP tidak saling membuka dua koneksi.
+- TCP_NODELAY + keepAlive.
+- Framing audio agar data PCM tidak tercampur dengan pembacaan stream.
+- Deteksi koneksi mati dan auto reconnect.
+- Status koneksi berdasarkan socket nyata, bukan simulasi UI.
 
-Fitur:
-- mDNS/NSD auto discovery
-- TCP auto connection
-- Full duplex PCM audio 16 kHz mono
-- Mic ke speaker kedua arah
-- Auto reconnect setelah socket putus
-
-Cara tes:
-1. Install APK pada HP A dan HP B.
-2. Sambungkan kedua HP ke jaringan Wi-Fi yang sama (router/hotspot).
-3. Buka aplikasi pada kedua HP dan izinkan microphone.
-4. Tunggu status menjadi TERHUBUNG.
-5. Bicara dari HP A dan dengarkan HP B, lalu sebaliknya.
-6. Untuk mencegah feedback, gunakan earphone saat tes awal.
+Tes:
+1. Build APK.
+2. Install di 2 HP.
+3. Kedua HP harus berada pada Wi-Fi/LAN yang sama.
+4. Izinkan Microphone.
+5. Buka kedua aplikasi dan tunggu status TERHUBUNG.
+6. Tes suara dengan earphone terlebih dahulu.
 
 Catatan:
-V1.1 belum merupakan multi-hop mesh. Ini adalah fondasi koneksi nyata 2 HP. Setelah ini stabil, tahap berikutnya adalah multi-peer/relay, auto route, lalu internet fallback.
+V1.2 masih 1 peer langsung (2 HP). Setelah koneksi stabil, tahap berikutnya adalah multi-peer mesh relay dan kemudian internet fallback.

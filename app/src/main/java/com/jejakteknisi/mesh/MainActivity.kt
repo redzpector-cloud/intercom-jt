@@ -16,24 +16,24 @@ import androidx.core.content.ContextCompat
 
 class MainActivity : ComponentActivity() {
     private lateinit var engine: IntercomEngine
+
     private val permissionLauncher = registerForActivityResult(
-        ActivityResultContracts.RequestMultiplePermissions()
+        ActivityResultContracts.RequestPermission()
     ) { granted ->
-        if (granted[Manifest.permission.RECORD_AUDIO] == true) engine.start()
+        if (granted) engine.start()
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         engine = IntercomEngine(this)
         setContent { IntercomScreen(engine) }
-        requestAudioPermission()
-    }
 
-    private fun requestAudioPermission() {
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
-            != PackageManager.PERMISSION_GRANTED) {
-            permissionLauncher.launch(arrayOf(Manifest.permission.RECORD_AUDIO))
-        } else engine.start()
+            == PackageManager.PERMISSION_GRANTED) {
+            engine.start()
+        } else {
+            permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+        }
     }
 
     override fun onDestroy() {
@@ -62,7 +62,7 @@ fun IntercomScreen(engine: IntercomEngine) {
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 Text("JEJAK TEKNISI", style = MaterialTheme.typography.headlineMedium)
-                Text("MESH INTERCOM V1.1", style = MaterialTheme.typography.titleMedium)
+                Text("MESH INTERCOM V1.2", style = MaterialTheme.typography.titleMedium)
                 Spacer(Modifier.height(20.dp))
 
                 Card(Modifier.fillMaxWidth()) {
@@ -73,13 +73,16 @@ fun IntercomScreen(engine: IntercomEngine) {
                         )
                         Spacer(Modifier.height(8.dp))
                         Text("Mode: AUTO LOCAL")
-                        Text(if (connected) "Audio real-time aktif" else "Pastikan kedua HP di Wi-Fi yang sama")
+                        Text(
+                            if (connected) "Audio 2 arah aktif"
+                            else "Hubungkan kedua HP ke Wi-Fi yang sama"
+                        )
                     }
                 }
 
-                Spacer(Modifier.height(24.dp))
+                Spacer(Modifier.height(28.dp))
                 Text(
-                    if (connected) "🎙️ Mic ↔ 🔊 Speaker AKTIF"
+                    if (connected) "🎙️ ↔ 🔊 AUDIO AKTIF"
                     else "🔎 MENCARI HP LAIN...",
                     style = MaterialTheme.typography.titleMedium
                 )
@@ -94,9 +97,10 @@ fun IntercomScreen(engine: IntercomEngine) {
                 ) {
                     Text("CARI ULANG")
                 }
-                Spacer(Modifier.height(10.dp))
+
+                Spacer(Modifier.height(12.dp))
                 Text(
-                    "V1.1 menggunakan Wi-Fi yang sama untuk tes 2 HP.",
+                    "V1.2: koneksi 2 HP nyata + auto reconnect.",
                     style = MaterialTheme.typography.bodySmall
                 )
             }

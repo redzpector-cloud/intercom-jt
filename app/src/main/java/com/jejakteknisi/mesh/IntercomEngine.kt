@@ -1,120 +1,173 @@
 package com.jejakteknisi.mesh
 
 import android.content.Context
-import android.media.AudioFormat
-import android.media.AudioManager
-import android.media.AudioRecord
-import android.media.AudioTrack
-import android.media.MediaRecorder
+import android.media.*
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
+import android.os.SystemClock
 import kotlinx.coroutines.*
 import java.io.*
 import java.net.ServerSocket
 import java.net.Socket
+import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 
 class IntercomEngine(private val context: Context) {
     companion object {
         private const val SERVICE_TYPE = "_jtintercom._tcp."
-        private const val SERVICE_NAME = "JejakTeknisi"
         private const val SAMPLE_RATE = 16000
         private const val CHANNEL_IN = AudioFormat.CHANNEL_IN_MONO
         private const val CHANNEL_OUT = AudioFormat.CHANNEL_OUT_MONO
         private const val ENCODING = AudioFormat.ENCODING_PCM_16BIT
+        private const val HANDSHAKE = "JT1"
+        private const val HEARTBEAT_MS = 2000L
+        private const val DEAD_MS = 7000L
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val nsd = context.getSystemService(Context.NSD_SERVICE) as NsdManager
-    private var registrationListener: NsdManager.RegistrationListener? = null
-    private var discoveryListener: NsdManager.DiscoveryListener? = null
+    private val localId = UUID.randomUUID().toString().replace("-", "").take(8)
+    private val localName = "JT-$localId"
+
+    private var registration: NsdManager.RegistrationListener? = null
+    private var discovery: NsdManager.DiscoveryListener? = null
     private var server: ServerSocket? = null
-    private var socket: Socket? = null
+    @Volatile private var socket: Socket? = null
     private var record: AudioRecord? = null
     private var track: AudioTrack? = null
     private val running = AtomicBoolean(false)
-    @Volatile var status: String = "Mencari HP lain..."
+    private val connecting = AtomicBoolean(false)
+    @Volatile private var lastRx = 0L
+
+    @Volatile var status: String = "Menyiapkan jaringan..."
         private set
     var onStatus: ((String) -> Unit)? = null
 
-    private fun setStatus(s: String) { status = s; onStatus?.invoke(s) }
+    private fun setStatus(s: String) {
+        status = s
+        onStatus?.invoke(s)
+    }
 
     fun start() {
         if (running.getAndSet(true)) return
         setStatus("Mencari HP lain...")
-        scope.launch { startServerAndAdvertise() }
-        discover()
+        scope.launch { startServer() }
+        scope.launch { discoverLoop() }
     }
 
-    private fun startServerAndAdvertise() {
+    private suspend fun startServer() {
         try {
             server = ServerSocket(0)
-            val port = server!!.localPort
             val info = NsdServiceInfo().apply {
-                serviceName = SERVICE_NAME
+                serviceName = localName
                 serviceType = SERVICE_TYPE
-                this.port = port
+                port = server!!.localPort
             }
-            registrationListener = object : NsdManager.RegistrationListener {
-                override fun onServiceRegistered(serviceInfo: NsdServiceInfo) {
-                    setStatus("Menunggu HP lain...")
+            registration = object : NsdManager.RegistrationListener {
+                override fun onServiceRegistered(info: NsdServiceInfo) {}
+                override fun onRegistrationFailed(info: NsdServiceInfo, code: Int) {
+                    setStatus("Gagal mendaftarkan jaringan ($code)")
                 }
-                override fun onRegistrationFailed(serviceInfo: NsdServiceInfo, errorCode: Int) {}
-                override fun onServiceUnregistered(serviceInfo: NsdServiceInfo) {}
-                override fun onUnregistrationFailed(serviceInfo: NsdServiceInfo, errorCode: Int) {}
+                override fun onServiceUnregistered(info: NsdServiceInfo) {}
+                override fun onUnregistrationFailed(info: NsdServiceInfo, code: Int) {}
             }
-            nsd.registerService(info, NsdManager.PROTOCOL_DNS_SD, registrationListener)
+            nsd.registerService(info, NsdManager.PROTOCOL_DNS_SD, registration)
+
             while (running.get()) {
-                val client = server!!.accept()
-                if (socket == null || socket!!.isClosed) {
-                    connectSocket(client)
-                } else client.close()
+                val incoming = server!!.accept()
+                scope.launch { handleIncoming(incoming) }
             }
-        } catch (e: Exception) {
-            if (running.get()) setStatus("Server error: ${e.message}")
+        } catch (_: Exception) {
+            if (running.get()) setStatus("Server jaringan berhenti, mencoba lagi...")
         }
     }
 
-    private fun discover() {
-        discoveryListener = object : NsdManager.DiscoveryListener {
-            override fun onDiscoveryStarted(regType: String) {}
-            override fun onDiscoveryStopped(regType: String) {}
-            override fun onStartDiscoveryFailed(regType: String, errorCode: Int) {
-                setStatus("Discovery gagal ($errorCode)")
+    private fun discoverLoop() {
+        discovery = object : NsdManager.DiscoveryListener {
+            override fun onDiscoveryStarted(type: String) {}
+            override fun onDiscoveryStopped(type: String) {}
+            override fun onStartDiscoveryFailed(type: String, code: Int) {
+                setStatus("Pencarian gagal ($code)")
             }
-            override fun onStopDiscoveryFailed(regType: String, errorCode: Int) {}
+            override fun onStopDiscoveryFailed(type: String, code: Int) {}
             override fun onServiceFound(info: NsdServiceInfo) {
-                if (info.serviceType != SERVICE_TYPE) return
+                if (!running.get() || info.serviceType != SERVICE_TYPE) return
                 nsd.resolveService(info, object : NsdManager.ResolveListener {
-                    override fun onResolveFailed(serviceInfo: NsdServiceInfo, errorCode: Int) {}
+                    override fun onResolveFailed(serviceInfo: NsdServiceInfo, code: Int) {}
                     override fun onServiceResolved(serviceInfo: NsdServiceInfo) {
                         if (!running.get()) return
-                        if (serviceInfo.serviceName == SERVICE_NAME &&
-                            (socket == null || socket!!.isClosed)) {
-                            scope.launch {
-                                try {
-                                    connectSocket(Socket(serviceInfo.host, serviceInfo.port))
-                                } catch (_: Exception) {}
-                            }
+                        val remoteName = serviceInfo.serviceName
+                        val remoteId = remoteName.removePrefix("JT-")
+                        if (remoteId.isBlank() || remoteId == localId) return
+
+                        // Deterministic rule: only the lexicographically smaller ID connects.
+                        // This prevents both phones from opening two sockets to each other.
+                        if (localId < remoteId && (socket == null || socket!!.isClosed)) {
+                            connectTo(serviceInfo.host, serviceInfo.port)
                         }
                     }
                 })
             }
             override fun onServiceLost(info: NsdServiceInfo) {
                 if (running.get() && (socket == null || socket!!.isClosed))
-                    setStatus("HP terputus, mencari lagi...")
+                    setStatus("HP terputus — mencari lagi...")
             }
         }
-        nsd.discoverServices(SERVICE_TYPE, NsdManager.PROTOCOL_DNS_SD, discoveryListener)
+        nsd.discoverServices(SERVICE_TYPE, NsdManager.PROTOCOL_DNS_SD, discovery)
+    }
+
+    private fun connectTo(host: java.net.InetAddress, port: Int) {
+        if (!connecting.compareAndSet(false, true)) return
+        scope.launch {
+            try {
+                val s = Socket()
+                s.tcpNoDelay = true
+                s.keepAlive = true
+                s.connect(java.net.InetSocketAddress(host, port), 3000)
+                val out = DataOutputStream(BufferedOutputStream(s.getOutputStream()))
+                out.writeUTF("$HANDSHAKE:$localId")
+                out.flush()
+                installSocket(s)
+            } catch (_: Exception) {
+                setStatus("Mencoba menyambung ulang...")
+            } finally {
+                connecting.set(false)
+            }
+        }
+    }
+
+    private suspend fun handleIncoming(s: Socket) {
+        try {
+            s.tcpNoDelay = true
+            s.keepAlive = true
+            val input = DataInputStream(BufferedInputStream(s.getInputStream()))
+            val hello = input.readUTF()
+            if (!hello.startsWith("$HANDSHAKE:")) {
+                s.close()
+                return
+            }
+            if (socket == null || socket!!.isClosed) {
+                withContext(Dispatchers.IO) { installSocket(s) }
+            } else {
+                s.close()
+            }
+        } catch (_: Exception) {
+            try { s.close() } catch (_: Exception) {}
+        }
     }
 
     @Synchronized
-    private fun connectSocket(s: Socket) {
-        if (!running.get()) { s.close(); return }
-        if (socket != null && !socket!!.isClosed) { s.close(); return }
+    private fun installSocket(s: Socket) {
+        if (!running.get()) {
+            try { s.close() } catch (_: Exception) {}
+            return
+        }
+        if (socket != null && !socket!!.isClosed) {
+            try { s.close() } catch (_: Exception) {}
+            return
+        }
         socket = s
-        s.tcpNoDelay = true
-        s.keepAlive = true
+        lastRx = SystemClock.elapsedRealtime()
         setStatus("🟢 TERHUBUNG")
         startAudio(s)
     }
@@ -126,60 +179,96 @@ class IntercomEngine(private val context: Context) {
             setStatus("Audio tidak didukung")
             return
         }
+
+        record?.release()
+        track?.release()
+
         record = AudioRecord(
             MediaRecorder.AudioSource.VOICE_COMMUNICATION,
             SAMPLE_RATE, CHANNEL_IN, ENCODING, minIn * 2
         )
         track = AudioTrack(
-            AudioManager.STREAM_VOICE_CALL, SAMPLE_RATE, CHANNEL_OUT, ENCODING,
-            minOut * 2, AudioTrack.MODE_STREAM
+            AudioAttributes.Builder()
+                .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
+                .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                .build(),
+            AudioFormat.Builder()
+                .setSampleRate(SAMPLE_RATE)
+                .setEncoding(ENCODING)
+                .setChannelMask(CHANNEL_OUT)
+                .build(),
+            minOut * 2,
+            AudioTrack.MODE_STREAM,
+            AudioManager.AUDIO_SESSION_ID_GENERATE
         )
-        track?.play()
 
+        try { track?.play() } catch (_: Exception) {}
+
+        // Audio sender. TCP carries a simple framed stream: 4-byte length + PCM.
         scope.launch {
             try {
-                val out = BufferedOutputStream(s.getOutputStream())
+                val out = DataOutputStream(BufferedOutputStream(s.getOutputStream()))
                 val buffer = ByteArray(640)
                 record?.startRecording()
-                while (running.get() && !s.isClosed) {
+                while (running.get() && s === socket && !s.isClosed) {
                     val n = record?.read(buffer, 0, buffer.size) ?: -1
                     if (n > 0) {
+                        out.writeInt(n)
                         out.write(buffer, 0, n)
                         out.flush()
                     }
                 }
             } catch (_: Exception) {
-                handleDisconnect()
+                disconnectIfCurrent(s)
             }
         }
 
+        // Audio receiver.
         scope.launch {
             try {
-                val input = BufferedInputStream(s.getInputStream())
-                val buffer = ByteArray(640)
-                while (running.get() && !s.isClosed) {
-                    val n = input.read(buffer)
-                    if (n < 0) break
-                    if (n > 0) track?.write(buffer, 0, n)
+                val input = DataInputStream(BufferedInputStream(s.getInputStream()))
+                while (running.get() && s === socket && !s.isClosed) {
+                    val n = input.readInt()
+                    if (n !in 1..4096) throw IOException("Invalid audio frame")
+                    val data = ByteArray(n)
+                    input.readFully(data)
+                    lastRx = SystemClock.elapsedRealtime()
+                    track?.write(data, 0, n)
                 }
             } catch (_: Exception) {
-                handleDisconnect()
+                disconnectIfCurrent(s)
             }
+        }
+
+        // Heartbeat/dead connection detector. Audio is continuously sent, but this
+        // also lets the app recover when the remote microphone is silent or paused.
+        scope.launch {
+            try {
+                while (running.get() && s === socket && !s.isClosed) {
+                    delay(HEARTBEAT_MS)
+                    if (SystemClock.elapsedRealtime() - lastRx > DEAD_MS) {
+                        disconnectIfCurrent(s)
+                        break
+                    }
+                }
+            } catch (_: Exception) {}
         }
     }
 
-    private fun handleDisconnect() {
-        try { socket?.close() } catch (_: Exception) {}
+    @Synchronized
+    private fun disconnectIfCurrent(s: Socket) {
+        if (socket !== s) return
+        try { s.close() } catch (_: Exception) {}
         socket = null
-        record?.stop()
-        track?.pause()
-        if (running.get()) setStatus("🟡 Terputus — mencari lagi...")
+        try { record?.stop() } catch (_: Exception) {}
+        try { track?.pause() } catch (_: Exception) {}
+        if (running.get()) setStatus("🟡 Terputus — otomatis mencari lagi...")
     }
 
     fun stop() {
         if (!running.getAndSet(false)) return
-        try { discoveryListener?.let { nsd.stopServiceDiscovery(it) } } catch (_: Exception) {}
-        try { registrationListener?.let { nsd.unregisterService(it) } } catch (_: Exception) {}
+        try { discovery?.let { nsd.stopServiceDiscovery(it) } } catch (_: Exception) {}
+        try { registration?.let { nsd.unregisterService(it) } } catch (_: Exception) {}
         try { socket?.close() } catch (_: Exception) {}
         try { server?.close() } catch (_: Exception) {}
         try { record?.stop() } catch (_: Exception) {}
