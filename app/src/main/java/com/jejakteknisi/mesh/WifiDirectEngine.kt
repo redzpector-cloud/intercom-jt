@@ -149,6 +149,11 @@ class WifiDirectEngine(private val context: Context) {
         }
     }
 
+    /** Manual retry button exposed to the UI. */
+    fun connectToFirstPeer() {
+        if (!running.get()) start() else requestPeersAndConnect()
+    }
+
     private fun requestPeersAndConnect() {
         if (!running.get() || !hasPermission()) return
         try {
