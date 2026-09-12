@@ -1,0 +1,1 @@
+V1.7 Wi-Fi Direct discovery overhaul: correct permissions, location compatibility, repeated discovery, peer callbacks, auto-connect, and clearer statuses.
