@@ -62,7 +62,7 @@ fun IntercomScreen(engine: IntercomEngine) {
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 Text("JEJAK TEKNISI", style = MaterialTheme.typography.headlineMedium)
-                Text("MESH INTERCOM V1.2", style = MaterialTheme.typography.titleMedium)
+                Text("MESH INTERCOM V1.3", style = MaterialTheme.typography.titleMedium)
                 Spacer(Modifier.height(20.dp))
 
                 Card(Modifier.fillMaxWidth()) {
@@ -100,7 +100,7 @@ fun IntercomScreen(engine: IntercomEngine) {
 
                 Spacer(Modifier.height(12.dp))
                 Text(
-                    "V1.2: koneksi 2 HP nyata + auto reconnect.",
+                    "V1.3: koneksi 2 HP + reconnect lebih stabil.",
                     style = MaterialTheme.typography.bodySmall
                 )
             }

@@ -5,6 +5,7 @@ import android.media.*
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
 import android.os.SystemClock
+import android.net.wifi.WifiManager
 import kotlinx.coroutines.*
 import java.io.*
 import java.net.ServerSocket
@@ -28,6 +29,11 @@ class IntercomEngine(private val context: Context) {
     private val nsd = context.getSystemService(Context.NSD_SERVICE) as NsdManager
     private val localId = UUID.randomUUID().toString().replace("-", "").take(8)
     private val localName = "JT-$localId"
+    private val wifiLock = (context.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager)
+        .createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "JejakTeknisi:Intercom")
+
+    @Volatile private var lastHost: java.net.InetAddress? = null
+    @Volatile private var lastPort: Int = -1
 
     private var registration: NsdManager.RegistrationListener? = null
     private var discovery: NsdManager.DiscoveryListener? = null
@@ -51,6 +57,7 @@ class IntercomEngine(private val context: Context) {
     fun start() {
         if (running.getAndSet(true)) return
         setStatus("Mencari HP lain...")
+        try { if (!wifiLock.isHeld) wifiLock.acquire() } catch (_: Exception) {}
         scope.launch { startServer() }
         scope.launch { discoverLoop() }
     }
@@ -124,6 +131,8 @@ class IntercomEngine(private val context: Context) {
                 s.tcpNoDelay = true
                 s.keepAlive = true
                 s.connect(java.net.InetSocketAddress(host, port), 3000)
+                lastHost = host
+                lastPort = port
                 val out = DataOutputStream(BufferedOutputStream(s.getOutputStream()))
                 out.writeUTF("$HANDSHAKE:$localId")
                 out.flush()
@@ -167,6 +176,8 @@ class IntercomEngine(private val context: Context) {
             return
         }
         socket = s
+        lastHost = s.inetAddress
+        lastPort = s.port
         lastRx = SystemClock.elapsedRealtime()
         setStatus("🟢 TERHUBUNG")
         startAudio(s)
@@ -262,7 +273,29 @@ class IntercomEngine(private val context: Context) {
         socket = null
         try { record?.stop() } catch (_: Exception) {}
         try { track?.pause() } catch (_: Exception) {}
-        if (running.get()) setStatus("🟡 Terputus — otomatis mencari lagi...")
+        if (running.get()) {
+            setStatus("🟡 Terputus — reconnect otomatis...")
+            startReconnectLoop()
+        }
+    }
+
+    private fun startReconnectLoop() {
+        scope.launch {
+            var delayMs = 500L
+            repeat(20) {
+                if (!running.get() || (socket != null && !socket!!.isClosed)) return@launch
+                val host = lastHost
+                val port = lastPort
+                if (host != null && port > 0) {
+                    connectTo(host, port)
+                }
+                delay(delayMs)
+                delayMs = (delayMs * 2).coerceAtMost(5000L)
+            }
+            if (running.get() && (socket == null || socket!!.isClosed)) {
+                setStatus("🟡 Mencari ulang HP...")
+            }
+        }
     }
 
     fun stop() {
@@ -276,6 +309,7 @@ class IntercomEngine(private val context: Context) {
         try { track?.stop() } catch (_: Exception) {}
         try { track?.release() } catch (_: Exception) {}
         socket = null
+        try { if (wifiLock.isHeld) wifiLock.release() } catch (_: Exception) {}
         setStatus("Tidak terhubung")
     }
 }
