@@ -1,6 +1,6 @@
 # Jejak Teknisi Internet Intercom V2.0
 
-Versi ini mengganti Wi-Fi Direct / NSD dengan **Internet Intercom**.
+Versi ini mengganti Internet / Wi-Fi / Data Seluler / NSD dengan **Internet Intercom**.
 
 ## Cara kerja
 

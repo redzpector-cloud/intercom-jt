@@ -8,6 +8,7 @@ import org.java_websocket.client.WebSocketClient
 import org.java_websocket.handshake.ServerHandshake
 import org.json.JSONObject
 import java.net.URI
+import java.nio.ByteBuffer
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -81,10 +82,12 @@ class InternetIntercomEngine(private val context: Context) {
                             else if (json.optString("type") == "waiting") setStatus("🟡 Menunggu HP kedua di ruang $room")
                         } catch (_: Exception) {}
                     }
-                    override fun onMessage(bytes: ByteArray?) {
-                        if (!running.get() || bytes == null || bytes.isEmpty()) return
+                    override fun onMessage(bytes: ByteBuffer?) {
+                        if (!running.get() || bytes == null || !bytes.hasRemaining()) return
+                        val data = ByteArray(bytes.remaining())
+                        bytes.get(data)
                         lastRx = SystemClock.elapsedRealtime()
-                        track?.write(bytes, 0, bytes.size)
+                        track?.write(data, 0, data.size)
                     }
                     override fun onClose(code: Int, reason: String?, remote: Boolean) {
                         connecting.set(false)
