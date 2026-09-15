@@ -1,0 +1,12 @@
+name = "intercom-jt"
+main = "src/index.js"
+compatibility_date = "2026-09-16"
+
+[durable_objects]
+bindings = [
+  { name = "INTERCOM_ROOM", class_name = "IntercomRoom" }
+]
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["IntercomRoom"]
