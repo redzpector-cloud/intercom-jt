@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: jejak-teknisi-intercom-relay
+    runtime: node
+    rootDir: relay-server
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /health

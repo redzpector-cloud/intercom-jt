@@ -1,8 +1,17 @@
 const http = require('http');
 const WebSocket = require('ws');
 
-const port = process.env.PORT || 8080;
-const server = http.createServer((req,res)=>{ res.writeHead(200, {'Content-Type':'text/plain'}); res.end('Jejak Teknisi Internet Intercom relay OK\n'); });
+const port = Number(process.env.PORT || 8080);
+const host = process.env.HOST || '0.0.0.0';
+const server = http.createServer((req,res)=>{
+  if (req.url === '/health' || req.url === '/') {
+    res.writeHead(200, {'Content-Type':'text/plain; charset=utf-8'});
+    res.end('Jejak Teknisi Internet Intercom relay OK\n');
+    return;
+  }
+  res.writeHead(404, {'Content-Type':'text/plain; charset=utf-8'});
+  res.end('Not found\n');
+});
 const wss = new WebSocket.Server({server, path:'/ws'});
 const rooms = new Map();
 
@@ -37,4 +46,4 @@ wss.on('connection',(ws)=>{
   ws.on('close',()=>leave(ws));
   ws.on('error',()=>leave(ws));
 });
-server.listen(port,()=>console.log(`Relay listening on :${port}`));
+server.listen(port, host, ()=>console.log(`Relay listening on ${host}:${port}`));
